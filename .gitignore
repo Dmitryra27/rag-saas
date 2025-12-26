@@ -1,3 +1,5 @@
 .idea
+.idea/*
 .env
 infra/terraform.tfvars
+dev*
