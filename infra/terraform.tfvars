@@ -1,0 +1,7 @@
+yc_api_key = "AQVN..."
+yc_cloud_id = "b1g..."
+yc_folder_id = "b1g..."
+gigachat_client_id = "ваш_client_id"
+gigachat_secret = "ваш_secret"
+jwt_secret = "supersecret123"
+pg_password = "rag_secure_password"

@@ -1,0 +1,56 @@
+name: Deploy RAG to Yandex Cloud
+
+on:
+  push:
+    branches: [main]
+
+env:
+  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+  YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # Установка yc
+      - name: Install yc
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+          yc config set api-key ${{ secrets.YC_API_KEY }}
+          yc config set cloud-id $YC_CLOUD_ID
+          yc config set folder-id $YC_FOLDER_ID
+
+      # Получение секретов из Lockbox
+      - name: Get secrets from Lockbox
+        run: |
+          echo "GIGACHAT_CLIENT_ID=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_CLIENT_ID)" >> .env
+          echo "GIGACHAT_SECRET=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_SECRET)" >> .env
+          echo "YC_API_KEY=$(yc lockbox payload get --name rag-secrets --key YC_API_KEY)" >> .env
+          echo "JWT_SECRET=$(yc lockbox payload get --name rag-secrets --key JWT_SECRET)" >> .env
+
+      # Terraform
+      - name: Terraform apply
+        run: |
+          cd infra
+          terraform init
+          terraform apply -auto-approve
+
+      # Сборка и пуш образа
+      - name: Build and push Docker image
+        run: |
+          docker build -t ghcr.io/${{ github.repository }}/rag-backend:latest services/backend
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push ghcr.io/${{ github.repository }}/rag-backend:latest
+
+      # Деплой в Kubernetes
+      - name: Deploy to Kubernetes
+        run: |
+          yc managed-kubernetes cluster get-credentials rag-cluster --external
+          kubectl apply -f k8s/namespace.yaml
+          # Заполнение secrets.yaml
+          export GIGACHAT_CLIENT_ID_B64=$(echo -n "$(yc lockbox payload get --name rag-secrets --key GIGACHAT_CLIENT_ID)" | base64 -w 0)
+          # ... аналогично для других секретов
+          envsubst < k8s/secrets.yaml | kubectl apply -f -
+          kubectl apply -f k8s/

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+  meta
+name: rag-backend
+namespace: rag
+spec:
+  selector:
+    app: rag-backend
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
