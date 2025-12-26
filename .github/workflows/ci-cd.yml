@@ -1,12 +1,12 @@
-name: Deploy RAG to Yandex Cloud
+name: Deploy RAG SaaS to Yandex Cloud
 
 on:
   push:
     branches: [main]
 
 env:
-  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
   YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
+  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
 
 jobs:
   deploy:
@@ -14,36 +14,48 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # Установка yc
-      - name: Install YC CLI
+      # Установка yc (последняя версия)
+      - name: Install latest yc CLI
         run: |
-          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
-          $HOME/yandex-cloud/bin/yc config set api-key ${{ secrets.YC_API_KEY }}
-          $HOME/yandex-cloud/bin/yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
-          $HOME/yandex-cloud/bin/yc config set folder-id ${{ secrets.YC_FOLDER_ID }}
+          curl -L "https://storage.yandexcloud.net/yandexcloud-yc/yc_linux_amd64_latest.tar.gz" | tar xz
+          sudo mv ./yc /usr/local/bin/
+          yc version
+
+      # Авторизация через OAuth-токен (надёжнее всего)
+      - name: Configure yc
+        run: |
+          yc config set token ${{ secrets.YC_OAUTH_TOKEN }}
+          yc config set cloud-id $YC_CLOUD_ID
+          yc config set folder-id $YC_FOLDER_ID
 
       # Получение секретов из Lockbox
-      - name: Get secrets from Lockbox
+      - name: Get secrets from Yandex Lockbox
         run: |
-          echo "GIGACHAT_CLIENT_ID=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_CLIENT_ID)" >> .env
-          echo "GIGACHAT_SECRET=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_SECRET)" >> .env
-          echo "YC_API_KEY=$(yc lockbox payload get --name rag-secrets --key YC_API_KEY)" >> .env
-          echo "JWT_SECRET=$(yc lockbox payload get --name rag-secrets --key JWT_SECRET)" >> .env
+          echo "GIGACHAT_CLIENT_ID=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_CLIENT_ID)" >> $GITHUB_ENV
+          echo "GIGACHAT_SECRET=$(yc lockbox payload get --name rag-secrets --key GIGACHAT_SECRET)" >> $GITHUB_ENV
+          echo "YC_API_KEY_FOR_APP=$(yc lockbox payload get --name rag-secrets --key YC_API_KEY)" >> $GITHUB_ENV
+          echo "JWT_SECRET=$(yc lockbox payload get --name rag-secrets --key JWT_SECRET)" >> $GITHUB_ENV
 
       # Terraform
       - name: Terraform apply
         run: |
           cd infra
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve \
+            -var="yc_api_key=${{ secrets.YC_API_KEY }}" \
+            -var="yc_cloud_id=$YC_CLOUD_ID" \
+            -var="yc_folder_id=$YC_FOLDER_ID" \
+            -var="gigachat_client_id=${{ env.GIGACHAT_CLIENT_ID }}" \
+            -var="gigachat_secret=${{ env.GIGACHAT_SECRET }}" \
+            -var="jwt_secret=${{ env.JWT_SECRET }}" \
+            -var="pg_password=rag_secure_password_123"
 
-      # Сборка и пуш образа
+      # Сборка Docker-образа
       - name: Build and push Docker image
         run: |
-          docker build -t ghcr.io/${{ github.repository }}/rag-backend:latest services/backend
+          docker build -t ghcr.io/${{ github.repository }}/backend:latest services/backend
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push ghcr.io/${{ github.repository }}/rag-backend:latest
+          docker push ghcr.io/${{ github.repository }}/backend:latest
 
       # Деплой в Kubernetes
       - name: Deploy to Kubernetes
@@ -51,7 +63,10 @@ jobs:
           yc managed-kubernetes cluster get-credentials rag-cluster --external
           kubectl apply -f k8s/namespace.yaml
           # Заполнение secrets.yaml
-          export GIGACHAT_CLIENT_ID_B64=$(echo -n "$(yc lockbox payload get --name rag-secrets --key GIGACHAT_CLIENT_ID)" | base64 -w 0)
-          # ... аналогично для других секретов
+          export GIGACHAT_CLIENT_ID_B64=$(echo -n "${{ env.GIGACHAT_CLIENT_ID }}" | base64 -w 0)
+          export GIGACHAT_SECRET_B64=$(echo -n "${{ env.GIGACHAT_SECRET }}" | base64 -w 0)
+          export YC_API_KEY_B64=$(echo -n "${{ env.YC_API_KEY_FOR_APP }}" | base64 -w 0)
+          export JWT_SECRET_B64=$(echo -n "${{ env.JWT_SECRET }}" | base64 -w 0)
           envsubst < k8s/secrets.yaml | kubectl apply -f -
-          kubectl apply -f k8s/
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/backend-service.yaml
