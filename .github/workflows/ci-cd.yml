@@ -15,9 +15,10 @@ jobs:
       - uses: actions/checkout@v3
 
       # Установка yc
-      - name: Install yc
+      - name: Install YC CLI
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
+          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
           yc config set api-key ${{ secrets.YC_API_KEY }}
           yc config set cloud-id $YC_CLOUD_ID
           yc config set folder-id $YC_FOLDER_ID
