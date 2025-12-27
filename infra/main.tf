@@ -8,7 +8,8 @@ terraform {
 }
 
 provider "yandex" {
-  api_key   = var.yc_api_key
+  # Используем IAM-токен через yc CLI (рекомендуется)
+  # → Terraform будет брать токен из yc config автоматически
   cloud_id  = var.yc_cloud_id
   folder_id = var.yc_folder_id
   zone      = "ru-central1-a"
